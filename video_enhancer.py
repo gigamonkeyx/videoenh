@@ -8,6 +8,7 @@ RTX 3080 Optimized with VRAM Monitoring
 import sys
 import os
 import time
+import logging
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import cv2
@@ -17,6 +18,7 @@ import torch.nn as nn
 from collections import deque
 import threading
 from pathlib import Path
+import concurrent.futures
 
 # Add repo paths for model imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'MVDenoiser'))
@@ -24,6 +26,28 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'TAP'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'DarkIR'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Cobra'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'VanGogh'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'LVCD'))
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create formatters
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+
+# File handler
+file_handler = logging.FileHandler('app.log')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+
+# Add handlers to logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
 
 class VideoEnhancerApp:
     def __init__(self, root):
@@ -49,6 +73,13 @@ class VideoEnhancerApp:
         self.ref_path = tk.StringVar()
         self.progress_var = tk.DoubleVar()
         self.status_var = tk.StringVar(value="Ready")
+
+        # Tuning parameters
+        self.darkir_gain = tk.DoubleVar(value=1.0)
+        self.tap_sigma = tk.DoubleVar(value=15.0)
+        self.vangogh_steps = tk.DoubleVar(value=30.0)
+        self.cobra_ref_weight = tk.DoubleVar(value=0.8)
+        self.console_visible = tk.BooleanVar(value=True)
         
         # Frame buffer for temporal processing
         self.frame_buffer = deque(maxlen=5)
@@ -57,6 +88,9 @@ class VideoEnhancerApp:
         # RL Evolution parameters
         self.rl_threshold = 0.5
         self.fitness_scores = []
+
+        # Threading for parallel processing
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         
         self.setup_ui()
         
@@ -113,7 +147,7 @@ class VideoEnhancerApp:
         # Colorizer selection
         ttk.Label(main_frame, text="Colorizer:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.colorizer_combo = ttk.Combobox(main_frame, textvariable=self.colorizer_var,
-                                           values=["VanGogh", "Cobra"], state="readonly")
+                                           values=["VanGogh", "Cobra", "LVCD"], state="readonly")
         self.colorizer_combo.grid(row=5, column=1, sticky=tk.W, padx=5)
         self.colorizer_combo.bind('<<ComboboxSelected>>', self.on_colorizer_change)
 
@@ -145,14 +179,74 @@ class VideoEnhancerApp:
         # VRAM monitor
         self.vram_label = ttk.Label(main_frame, text="VRAM: 0.00GB")
         self.vram_label.grid(row=11, column=0, columnspan=3, pady=5)
-        
+
+        # Tuning Parameters Section
+        tuning_frame = ttk.LabelFrame(main_frame, text="Tuning Parameters", padding="5")
+        tuning_frame.grid(row=12, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+
+        # DarkIR Gain Slider
+        ttk.Label(tuning_frame, text="DarkIR Gain:").grid(row=0, column=0, sticky=tk.W)
+        self.gain_slider = ttk.Scale(tuning_frame, from_=0.5, to=2.0, variable=self.darkir_gain,
+                                    orient=tk.HORIZONTAL, length=200)
+        self.gain_slider.grid(row=0, column=1, padx=5)
+        ttk.Label(tuning_frame, textvariable=self.darkir_gain).grid(row=0, column=2)
+
+        # TAP Sigma Slider
+        ttk.Label(tuning_frame, text="Denoise Strength:").grid(row=1, column=0, sticky=tk.W)
+        self.sigma_slider = ttk.Scale(tuning_frame, from_=5, to=50, variable=self.tap_sigma,
+                                     orient=tk.HORIZONTAL, length=200)
+        self.sigma_slider.grid(row=1, column=1, padx=5)
+        ttk.Label(tuning_frame, textvariable=self.tap_sigma).grid(row=1, column=2)
+
+        # VanGogh Steps Slider
+        ttk.Label(tuning_frame, text="VanGogh Steps:").grid(row=2, column=0, sticky=tk.W)
+        self.steps_slider = ttk.Scale(tuning_frame, from_=10, to=50, variable=self.vangogh_steps,
+                                     orient=tk.HORIZONTAL, length=200)
+        self.steps_slider.grid(row=2, column=1, padx=5)
+        ttk.Label(tuning_frame, textvariable=self.vangogh_steps).grid(row=2, column=2)
+
+        # Cobra Reference Weight Slider
+        ttk.Label(tuning_frame, text="Cobra Ref Weight:").grid(row=3, column=0, sticky=tk.W)
+        self.ref_weight_slider = ttk.Scale(tuning_frame, from_=0.0, to=1.0, variable=self.cobra_ref_weight,
+                                          orient=tk.HORIZONTAL, length=200)
+        self.ref_weight_slider.grid(row=3, column=1, padx=5)
+        ttk.Label(tuning_frame, textvariable=self.cobra_ref_weight).grid(row=3, column=2)
+
+        # User Feedback for RL
+        feedback_frame = ttk.Frame(tuning_frame)
+        feedback_frame.grid(row=4, column=0, columnspan=3, pady=10)
+        ttk.Label(feedback_frame, text="Quality Feedback:").pack(side='left', padx=5)
+        ttk.Button(feedback_frame, text="👍", command=self.thumbs_up, width=5).pack(side='left', padx=2)
+        ttk.Button(feedback_frame, text="👎", command=self.thumbs_down, width=5).pack(side='left', padx=2)
+
+        # Console Section
+        console_frame = ttk.Frame(self.root)
+        console_frame.pack(side='bottom', fill='both', expand=True, padx=10, pady=5)
+
+        # Console toggle button
+        ttk.Button(console_frame, text="Toggle Console", command=self.toggle_console).pack(side='top', pady=2)
+
+        # Console text widget with scrollbar
+        console_text_frame = ttk.Frame(console_frame)
+        console_text_frame.pack(fill='both', expand=True)
+
+        self.console = tk.Text(console_text_frame, height=10, state='disabled', bg='black', fg='green',
+                              font=('Consolas', 9))
+        console_scrollbar = ttk.Scrollbar(console_text_frame, orient='vertical', command=self.console.yview)
+        self.console.configure(yscrollcommand=console_scrollbar.set)
+
+        self.console.pack(side='left', fill='both', expand=True)
+        console_scrollbar.pack(side='right', fill='y')
+
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        
-        # Start VRAM monitoring
+        tuning_frame.columnconfigure(1, weight=1)
+
+        # Start VRAM monitoring and initial log
         self.monitor_vram()
+        self.log("Video Enhancement Tool initialized", "INFO")
     
     def browse_input(self):
         """Browse for input video file"""
@@ -198,13 +292,78 @@ class VideoEnhancerApp:
             self.prompt_entry.config(state="normal")
         elif colorizer == "Cobra":
             self.prompt_entry.config(state="disabled")
+
+    def toggle_console(self):
+        """Toggle console visibility"""
+        if self.console_visible.get():
+            self.console.master.pack_forget()
+            self.console_visible.set(False)
+        else:
+            self.console.master.pack(side='bottom', fill='both', expand=True, padx=10, pady=5)
+            self.console_visible.set(True)
+
+    def log(self, message, level='INFO'):
+        """Log message to console and file"""
+        timestamp = time.strftime('%H:%M:%S')
+        formatted_message = f"{timestamp} [{level.upper()}] {message}"
+
+        # Log to file via logger
+        if level.upper() == 'ERROR':
+            logger.error(message)
+        elif level.upper() == 'WARNING':
+            logger.warning(message)
+        else:
+            logger.info(message)
+
+        # Log to GUI console
+        self.console.configure(state='normal')
+        self.console.insert('end', formatted_message + '\n')
+        self.console.configure(state='disabled')
+        self.console.see('end')
+
+        # Update GUI
+        self.root.update_idletasks()
+
+    def thumbs_up(self):
+        """User feedback: positive"""
+        self.log("User feedback: Positive (👍)", "INFO")
+        # Reward current parameters
+        reward = 0.9
+        self.fitness_scores.append(reward)
+        self.log(f"RL reward increased: {reward}", "INFO")
+
+    def thumbs_down(self):
+        """User feedback: negative"""
+        self.log("User feedback: Negative (👎)", "INFO")
+        # Penalize and mutate current parameters
+        reward = 0.3
+        self.fitness_scores.append(reward)
+
+        # Mutate parameters downwards
+        current_gain = self.darkir_gain.get()
+        current_sigma = self.tap_sigma.get()
+
+        if current_gain > 0.6:
+            new_gain = max(0.5, current_gain * 0.9)
+            self.darkir_gain.set(new_gain)
+            self.log(f"Mutated DarkIR gain: {current_gain:.2f} → {new_gain:.2f}", "INFO")
+
+        if current_sigma > 10:
+            new_sigma = max(5, current_sigma * 0.9)
+            self.tap_sigma.set(new_sigma)
+            self.log(f"Mutated denoise strength: {current_sigma:.1f} → {new_sigma:.1f}", "INFO")
     
     def monitor_vram(self):
         """Monitor VRAM usage"""
         if torch.cuda.is_available():
             vram_used = torch.cuda.memory_allocated() / 1e9
-            self.vram_label.config(text=f"VRAM: {vram_used:.2f}GB")
-            
+            vram_reserved = torch.cuda.memory_reserved() / 1e9
+            self.vram_label.config(text=f"VRAM: {vram_used:.2f}GB / {vram_reserved:.2f}GB")
+
+            # Log high VRAM usage
+            if vram_used > 6.0:
+                self.log(f"High VRAM usage: {vram_used:.2f}GB", "WARNING")
+
             # Adaptive window size based on VRAM
             if vram_used > 1.5:
                 self.window_size = 3
@@ -212,7 +371,7 @@ class VideoEnhancerApp:
             else:
                 self.window_size = 5
                 self.frame_buffer = deque(maxlen=5)
-        
+
         # Schedule next update
         self.root.after(1000, self.monitor_vram)
     
@@ -222,38 +381,46 @@ class VideoEnhancerApp:
             return self.models[model_name]
         
         try:
+            self.log(f"Loading model: {model_name}", "INFO")
+
             if model_name == "TAP":
-                # TAP model loading (placeholder - needs actual implementation)
                 model = self.load_tap_model()
             elif model_name == "MVDenoiser":
-                # MVDenoiser model loading (placeholder - needs actual implementation)
                 model = self.load_mvdenoiser_model()
             elif model_name == "DarkIR":
-                # DarkIR model loading (placeholder - needs actual implementation)
                 model = self.load_darkir_model()
             elif model_name == "VanGogh":
-                # VanGogh model loading (placeholder - sparse repo)
                 model = self.load_vangogh_model()
             elif model_name == "Cobra":
-                # Cobra model loading
                 model = self.load_cobra_model()
+            elif model_name == "LVCD":
+                model = self.load_lvcd_model()
             else:
                 raise ValueError(f"Unknown model: {model_name}")
-            
+
             model.to(self.device)
             model.eval()
             self.models[model_name] = model
-            
+
             # Fitness scoring for RL
             vram_used = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
             fitness = max(0, 1 - (vram_used / 2.0))  # Reward low VRAM usage
             self.fitness_scores.append(fitness)
-            
-            print(f"Model {model_name} loaded. VRAM: {vram_used:.2f}GB, Fitness: {fitness:.3f}")
+
+            self.log(f"Model {model_name} loaded successfully. VRAM: {vram_used:.2f}GB, Fitness: {fitness:.3f}", "INFO")
             return model
-            
+
+        except FileNotFoundError as e:
+            self.log(f"Weights not found for {model_name}, using random initialization", "WARNING")
+            messagebox.showwarning("Weights Missing", f"Model weights not found for {model_name}. Using random initialization.")
+            # Return a placeholder model
+            model = nn.Identity()
+            model.to(self.device)
+            self.models[model_name] = model
+            return model
+
         except Exception as e:
-            print(f"Error loading {model_name}: {e}")
+            self.log(f"Error loading {model_name}: {e}", "ERROR")
             messagebox.showerror("Model Loading Error", f"Failed to load {model_name}: {e}")
             return None
     
@@ -283,10 +450,20 @@ class VideoEnhancerApp:
         try:
             # Attempt to load Cobra model from app.py
             # This is a placeholder - actual implementation would load from Cobra/app.py
-            print("Loading Cobra colorization model...")
+            self.log("Loading Cobra colorization model...", "INFO")
             return nn.Identity()  # Temporary placeholder
         except Exception as e:
-            print(f"Error loading Cobra model: {e}")
+            self.log(f"Error loading Cobra model: {e}", "ERROR")
+            return nn.Identity()  # Fallback
+
+    def load_lvcd_model(self):
+        """Load LVCD colorization model"""
+        try:
+            # LVCD model loading - placeholder for now
+            self.log("Loading LVCD colorization model...", "INFO")
+            return nn.Identity()  # Temporary placeholder
+        except Exception as e:
+            self.log(f"Error loading LVCD model: {e}", "ERROR")
             return nn.Identity()  # Fallback
     
     def start_processing(self):
@@ -361,12 +538,19 @@ class VideoEnhancerApp:
                 if not ret:
                     break
 
-                # Handle B&W videos
+                # Handle B&W videos and IR preprocessing
                 if len(frame.shape) == 3 and frame.shape[2] == 3:
                     # Check if grayscale (all channels equal)
                     if np.allclose(frame[:,:,0], frame[:,:,1]) and np.allclose(frame[:,:,1], frame[:,:,2]):
                         # Convert to RGB by repeating channels
                         frame = cv2.cvtColor(frame[:,:,0], cv2.COLOR_GRAY2RGB)
+
+                        # IR-specific preprocessing: histogram equalization
+                        if self.detect_ir_frame(frame):
+                            self.log("IR mode detected, applying histogram equalization", "INFO")
+                            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+                            equalized = cv2.equalizeHist(gray)
+                            frame = cv2.cvtColor(equalized, cv2.COLOR_GRAY2RGB)
 
                 # Convert to tensor
                 frame_tensor = self.frame_to_tensor(frame)
@@ -393,8 +577,19 @@ class VideoEnhancerApp:
                         channel_var = torch.var(denoised_tensor, dim=[2,3]).mean()
                         if channel_var < 0.01:  # Likely grayscale
                             final_tensor = self.apply_colorization(colorizer_model, denoised_tensor)
+
+                            # Check if colorization failed (still grayscale)
+                            post_color_var = torch.var(final_tensor, dim=[2,3]).mean()
+                            if post_color_var < 0.01:
+                                self.log("Colorization failed, retrying with LVCD", "WARNING")
+                                try:
+                                    lvcd_model = self.load_model("LVCD")
+                                    if lvcd_model:
+                                        final_tensor = self.apply_colorization(lvcd_model, denoised_tensor)
+                                except Exception as e:
+                                    self.log(f"LVCD fallback failed: {e}", "ERROR")
                         else:
-                            print("RGB detected - skipping colorization")
+                            self.log("RGB detected - skipping colorization", "INFO")
 
                     # Convert back to frame
                     output_frame = self.tensor_to_frame(final_tensor)
@@ -536,6 +731,48 @@ class VideoEnhancerApp:
             print(f"Auto-selection error: {e}")
             return "VanGogh"  # Fallback
 
+    def detect_ir_frame(self, frame):
+        """Detect if frame is from IR/surveillance camera"""
+        try:
+            # Convert to grayscale for analysis
+            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+
+            # IR characteristics: low contrast, specific intensity distribution
+            mean_intensity = np.mean(gray)
+            std_intensity = np.std(gray)
+
+            # IR frames typically have low contrast and specific intensity ranges
+            is_ir = (mean_intensity < 80 and std_intensity < 30) or (mean_intensity > 200 and std_intensity < 20)
+
+            return is_ir
+        except Exception as e:
+            self.log(f"Error in IR detection: {e}", "ERROR")
+            return False
+
+    def check_rl_bias(self):
+        """Check for bias in RL parameter mutations"""
+        if len(self.fitness_scores) < 10:
+            return
+
+        recent_scores = self.fitness_scores[-10:]
+        low_scores = sum(1 for score in recent_scores if score < 0.5)
+
+        # If >70% of recent scores are low (indicating downward bias)
+        if low_scores > 7:
+            self.log("Bias detected: too many downward mutations", "WARNING")
+
+            # Randomize parameters upwards by 20%
+            current_gain = self.darkir_gain.get()
+            current_sigma = self.tap_sigma.get()
+
+            new_gain = min(2.0, current_gain * 1.2)
+            new_sigma = min(50, current_sigma * 1.2)
+
+            self.darkir_gain.set(new_gain)
+            self.tap_sigma.set(new_sigma)
+
+            self.log(f"Bias correction: gain {current_gain:.2f}→{new_gain:.2f}, sigma {current_sigma:.1f}→{new_sigma:.1f}", "INFO")
+
     def frame_to_tensor(self, frame):
         """Convert OpenCV frame to PyTorch tensor"""
         # Convert BGR to RGB
@@ -559,42 +796,62 @@ class VideoEnhancerApp:
         return frame_bgr
 
     def apply_darkir(self, model, frame_tensor):
-        """Apply DarkIR low-light enhancement"""
+        """Apply DarkIR low-light enhancement with gain parameter"""
         try:
             with torch.no_grad():
-                enhanced = model(frame_tensor)
-                return enhanced
+                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                    # Apply gain parameter for exposure adjustment
+                    gain = self.darkir_gain.get()
+                    if gain != 1.0:
+                        frame_tensor = frame_tensor * gain
+                        frame_tensor = torch.clamp(frame_tensor, 0, 1)
+                        self.log(f"Applied DarkIR gain: {gain:.2f}", "INFO")
+
+                    enhanced = model(frame_tensor)
+
+                    # Log tensor shapes for debugging
+                    self.log(f"DarkIR input shape: {frame_tensor.shape}, output shape: {enhanced.shape}", "DEBUG")
+
+                    return enhanced
         except Exception as e:
-            print(f"DarkIR processing error: {e}")
+            self.log(f"DarkIR processing error: {e}", "ERROR")
             return frame_tensor  # Return original on error
 
     def apply_denoising(self, model, model_name):
-        """Apply denoising to frame buffer"""
+        """Apply denoising to frame buffer with strength parameter"""
         try:
             with torch.no_grad():
-                if model_name == "TAP":
-                    # TAP expects temporal sequence
-                    if len(self.frame_buffer) >= 3:
-                        # Stack frames for temporal processing
-                        frames = torch.cat(list(self.frame_buffer)[-3:], dim=0)
-                        denoised = model(frames.unsqueeze(0))
-                        # Return center frame
-                        return denoised[0, 1:2]  # Middle frame
+                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                    sigma = self.tap_sigma.get()
+                    self.log(f"Using denoise strength: {sigma:.1f}", "INFO")
+
+                    if model_name == "TAP":
+                        # TAP expects temporal sequence
+                        if len(self.frame_buffer) >= 3:
+                            # Stack frames for temporal processing
+                            frames = torch.cat(list(self.frame_buffer)[-3:], dim=0)
+                            # Apply sigma parameter (placeholder - actual implementation would use it)
+                            denoised = model(frames.unsqueeze(0))
+                            # Return center frame
+                            result = denoised[0, 1:2]  # Middle frame
+                            self.log(f"TAP input shape: {frames.shape}, output shape: {result.shape}", "DEBUG")
+                            return result
+                        else:
+                            return self.frame_buffer[-1]
+
+                    elif model_name == "MVDenoiser":
+                        # MVDenoiser single frame processing
+                        current_frame = self.frame_buffer[-1]
+                        denoised = model(current_frame)
+                        self.log(f"MVDenoiser input shape: {current_frame.shape}, output shape: {denoised.shape}", "DEBUG")
+                        return denoised
+
                     else:
+                        # Fallback - return original
                         return self.frame_buffer[-1]
 
-                elif model_name == "MVDenoiser":
-                    # MVDenoiser single frame processing
-                    current_frame = self.frame_buffer[-1]
-                    denoised = model(current_frame)
-                    return denoised
-
-                else:
-                    # Fallback - return original
-                    return self.frame_buffer[-1]
-
         except Exception as e:
-            print(f"Denoising error ({model_name}): {e}")
+            self.log(f"Denoising error ({model_name}): {e}", "ERROR")
             return self.frame_buffer[-1]  # Return original on error
 
     def apply_colorization(self, model, frame_tensor):

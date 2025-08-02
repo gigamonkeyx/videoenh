@@ -308,5 +308,66 @@ class TestVideoEnhancerApp:
         # Result should be valid
         assert result in ["VanGogh", "Cobra"]
 
+    def test_ir_tuning(self, app):
+        """Test IR-specific tuning and brightness improvement"""
+        # Create dummy IR-like frame (low contrast, dark)
+        ir_frame = np.full((720, 1280, 3), 50, dtype=np.uint8)  # Dark frame
+
+        # Test IR detection
+        is_ir = app.detect_ir_frame(ir_frame)
+        assert is_ir == True, "Should detect IR frame"
+
+        # Test gain application
+        app.darkir_gain.set(1.5)
+        frame_tensor = app.frame_to_tensor(ir_frame)
+
+        # Mock DarkIR model
+        mock_model = Mock(return_value=frame_tensor * 1.2)  # Simulate brightness increase
+
+        enhanced = app.apply_darkir(mock_model, frame_tensor)
+        enhanced_frame = app.tensor_to_frame(enhanced)
+
+        # Check brightness improvement
+        original_brightness = np.mean(ir_frame)
+        enhanced_brightness = np.mean(enhanced_frame)
+        improvement = (enhanced_brightness - original_brightness) / original_brightness
+
+        assert improvement > 0.1, f"Brightness improvement should be >10%, got {improvement:.2%}"
+
+    def test_user_feedback_rl(self, app):
+        """Test user feedback integration with RL"""
+        original_gain = app.darkir_gain.get()
+        original_sigma = app.tap_sigma.get()
+
+        # Test thumbs down (should mutate parameters)
+        app.thumbs_down()
+
+        new_gain = app.darkir_gain.get()
+        new_sigma = app.tap_sigma.get()
+
+        # Parameters should be mutated downwards
+        assert new_gain <= original_gain, "Gain should be reduced after negative feedback"
+        assert new_sigma <= original_sigma, "Sigma should be reduced after negative feedback"
+
+        # Test thumbs up (should add positive reward)
+        initial_scores = len(app.fitness_scores)
+        app.thumbs_up()
+        assert len(app.fitness_scores) > initial_scores, "Should add fitness score"
+        assert app.fitness_scores[-1] > 0.8, "Should add high reward score"
+
+    def test_bias_detection(self, app):
+        """Test bias detection in RL system"""
+        # Simulate bias with many low scores
+        app.fitness_scores = [0.3] * 12
+
+        original_gain = app.darkir_gain.get()
+        original_sigma = app.tap_sigma.get()
+
+        app.check_rl_bias()
+
+        # Should correct bias by increasing parameters
+        assert app.darkir_gain.get() >= original_gain, "Should increase gain to correct bias"
+        assert app.tap_sigma.get() >= original_sigma, "Should increase sigma to correct bias"
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

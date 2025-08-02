@@ -68,27 +68,69 @@ def test_model_structure():
     try:
         from video_enhancer import VideoEnhancerApp
         import tkinter as tk
-        
+
         # Mock tkinter for headless testing
         root = tk.Tk()
         root.withdraw()  # Hide window
-        
+
         app = VideoEnhancerApp(root)
         print("✅ VideoEnhancerApp instantiated successfully")
-        
+
         # Test model cache
         assert hasattr(app, 'models'), "Model cache not found"
         assert isinstance(app.models, dict), "Model cache not a dictionary"
         print("✅ Model cache structure verified")
-        
+
         # Test device setup
         assert hasattr(app, 'device'), "Device not set"
         print(f"✅ Device set to: {app.device}")
-        
+
+        # Test colorization variables
+        assert hasattr(app, 'colorizer_var'), "Colorizer variable not found"
+        assert hasattr(app, 'color_var'), "Color enable variable not found"
+        assert hasattr(app, 'text_prompt'), "Text prompt variable not found"
+        assert hasattr(app, 'ref_path'), "Reference path variable not found"
+        print("✅ Colorization variables verified")
+
         root.destroy()
         return True
     except Exception as e:
         print(f"❌ Model structure test error: {e}")
+        return False
+
+def test_colorization_features():
+    """Test colorization-specific features"""
+    try:
+        from video_enhancer import VideoEnhancerApp
+        import tkinter as tk
+
+        root = tk.Tk()
+        root.withdraw()
+
+        app = VideoEnhancerApp(root)
+
+        # Test colorizer selection
+        app.colorizer_var.set("VanGogh")
+        assert app.colorizer_var.get() == "VanGogh"
+        print("✅ VanGogh colorizer selection works")
+
+        app.colorizer_var.set("Cobra")
+        assert app.colorizer_var.get() == "Cobra"
+        print("✅ Cobra colorizer selection works")
+
+        # Test text prompt
+        app.text_prompt.set("natural colors")
+        assert app.text_prompt.get() == "natural colors"
+        print("✅ Text prompt functionality works")
+
+        # Test auto-selection method exists
+        assert hasattr(app, 'auto_select_colorizer'), "Auto-select method not found"
+        print("✅ Auto-selection method available")
+
+        root.destroy()
+        return True
+    except Exception as e:
+        print(f"❌ Colorization features test error: {e}")
         return False
 
 def main():
@@ -100,6 +142,7 @@ def main():
         ("Import Test", test_imports),
         ("GPU Setup Test", test_gpu_setup),
         ("Model Structure Test", test_model_structure),
+        ("Colorization Features Test", test_colorization_features),
     ]
     
     passed = 0

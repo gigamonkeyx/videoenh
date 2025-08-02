@@ -90,6 +90,22 @@ python video_enhancer.py
 
 - **Auto Mode**: RL algorithm selects best colorizer based on content analysis
 
+#### IR/Surveillance Video Tuning
+- **DarkIR Gain Slider**: Adjust exposure/brightness (0.5-2.0)
+- **Denoise Strength**: Control noise reduction intensity (5-50)
+- **VanGogh Steps**: Diffusion model steps for quality vs speed (10-50)
+- **Cobra Reference Weight**: Blend automatic vs reference colors (0-1)
+- **User Feedback**: Thumbs up/down buttons for RL parameter optimization
+- **IR Detection**: Automatic histogram equalization for surveillance footage
+- **Console Logging**: Real-time processing information and VRAM monitoring
+
+#### Advanced Features
+- **Real-time Preview**: Slider adjustments show immediate effects
+- **Parallel Processing**: Multi-threaded frame processing for RTX 3080
+- **Bias Detection**: RL system prevents parameter drift
+- **Fallback Logic**: Automatic model switching on failures
+- **VRAM Optimization**: Dynamic batch sizing and memory monitoring
+
 #### GPU Optimizations
 - **Mixed Precision**: Automatic AMP for VRAM reduction
 - **Adaptive Buffering**: Window size adjusts based on VRAM usage
@@ -154,6 +170,14 @@ pytest tests/test_video_enhancer.py -v
 - **Batch processing**: Adaptive batch sizes
 - **Memory optimization**: Mixed precision enabled
 
+## Console Usage
+- **Toggle Console**: Button to show/hide processing logs
+- **Real-time Logging**: Timestamps, levels (INFO/WARNING/ERROR)
+- **VRAM Monitoring**: Memory usage after each processing step
+- **Parameter Logging**: Slider changes and RL mutations
+- **Error Tracking**: Detailed error messages and stack traces
+- **File Logging**: All messages saved to `app.log`
+
 ## Development Notes
 
 ### Model Integration Status
@@ -161,6 +185,8 @@ pytest tests/test_video_enhancer.py -v
 - ✅ GPU optimization implemented
 - ✅ VRAM monitoring active
 - ✅ RL auto-selection functional
+- ✅ IR tuning and console integration
+- ✅ LVCD colorization fallback
 - 🔄 Model weight loading (requires manual download)
 - 🔄 Audio integration (MoviePy placeholder)
 

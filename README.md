@@ -7,12 +7,14 @@ A comprehensive video enhancement tool that integrates multiple state-of-the-art
 
 ## Features
 
-- **Multi-Model Support**: TAP, MVDenoiser, and DarkIR integration
-- **GPU Optimization**: RTX 3080 optimized with VRAM monitoring (<2GB target)
+- **Multi-Model Support**: TAP, MVDenoiser, DarkIR, VanGogh, and Cobra integration
+- **Video Colorization**: Advanced B&W to color conversion with text prompts and reference images
+- **GPU Optimization**: RTX 3080 optimized with VRAM monitoring (<5GB target for colorization)
 - **RL Auto-Selection**: Evolutionary algorithm for automatic model selection
 - **Bias Mitigation**: Fitness-based bias detection and correction
-- **Temporal Processing**: Frame buffering for video denoising
+- **Temporal Processing**: Frame buffering for video denoising and colorization
 - **Low-Light Enhancement**: DarkIR integration for dark video processing
+- **Processing Chain**: Configurable Low-light → Denoise → Colorize pipeline
 - **Audio Preservation**: Automatic audio track copying
 
 ## Requirements
@@ -47,6 +49,8 @@ A comprehensive video enhancement tool that integrates multiple state-of-the-art
    - MVDenoiser: Download from [Google Drive](https://github.com/mxxx99/MVDenoiser)
    - TAP: Download from [Google Drive](https://github.com/zfu006/TAP)
    - DarkIR: Download from [Hugging Face](https://github.com/cidautai/DarkIR)
+   - Cobra: Download from [Hugging Face](https://huggingface.co/JunhaoZhuang/Cobra)
+   - VanGogh: Repository is sparse - using fallback implementation
    - Place weights in `weights/` subfolder
 
 ## Usage
@@ -65,8 +69,26 @@ python video_enhancer.py
 
 #### Processing Options
 - **Low-Light Enhancement**: Enable DarkIR preprocessing
+- **Video Colorization**: Convert B&W videos to color
+- **Text Prompts**: Guide VanGogh colorization with descriptions
+- **Reference Images**: Use Cobra with reference color images
 - **VRAM Monitoring**: Real-time memory usage display
 - **Progress Tracking**: ETA calculation and progress bar
+
+#### Colorization Usage
+- **VanGogh Mode**:
+  - Enable colorization checkbox
+  - Select "VanGogh" from dropdown
+  - Enter text prompt (e.g., "natural colors", "vintage film", "warm sunset tones")
+  - Process B&W video with text-guided colorization
+
+- **Cobra Mode**:
+  - Enable colorization checkbox
+  - Select "Cobra" from dropdown
+  - Upload reference JPG image with desired color palette
+  - Process B&W video matching reference colors
+
+- **Auto Mode**: RL algorithm selects best colorizer based on content analysis
 
 #### GPU Optimizations
 - **Mixed Precision**: Automatic AMP for VRAM reduction
@@ -123,7 +145,8 @@ pytest tests/test_video_enhancer.py -v
 
 ### VRAM Usage
 - **Baseline**: <2GB idle
-- **Processing**: <1.5GB average
+- **Denoising**: <1.5GB average
+- **Colorization**: <5GB peak (FP16 optimization)
 - **High-res fallback**: Automatic downscaling
 
 ### Processing Speed

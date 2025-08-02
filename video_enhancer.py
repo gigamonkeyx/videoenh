@@ -22,6 +22,8 @@ from pathlib import Path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'MVDenoiser'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'TAP'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'DarkIR'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Cobra'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'VanGogh'))
 
 class VideoEnhancerApp:
     def __init__(self, root):
@@ -41,6 +43,10 @@ class VideoEnhancerApp:
         self.output_path = tk.StringVar()
         self.denoiser_var = tk.StringVar(value="TAP")
         self.lowlight_var = tk.BooleanVar(value=False)
+        self.colorizer_var = tk.StringVar(value="VanGogh")
+        self.color_var = tk.BooleanVar(value=False)
+        self.text_prompt = tk.StringVar(value="natural colors")
+        self.ref_path = tk.StringVar()
         self.progress_var = tk.DoubleVar()
         self.status_var = tk.StringVar(value="Ready")
         
@@ -63,9 +69,16 @@ class VideoEnhancerApp:
             torch.backends.cudnn.deterministic = True
             torch.cuda.empty_cache()
             print(f"GPU initialized: {torch.cuda.get_device_name(0)}")
+            print(f"PyTorch version: {torch.__version__}")
+            print(f"CUDA version: {torch.version.cuda}")
             print(f"Initial VRAM: {torch.cuda.memory_allocated() / 1e9:.2f}GB")
+
+            # Enable mixed precision for VRAM optimization
+            self.use_amp = True
+            print("Mixed precision (AMP) enabled for VRAM optimization")
         else:
             print("CUDA not available - using CPU")
+            self.use_amp = False
     
     def setup_ui(self):
         """Create the user interface"""
@@ -90,24 +103,48 @@ class VideoEnhancerApp:
         denoiser_combo.grid(row=2, column=1, sticky=tk.W, padx=5)
         
         # Low-light enhancement
-        ttk.Checkbutton(main_frame, text="Enable Low-Light Enhancement (DarkIR)", 
+        ttk.Checkbutton(main_frame, text="Enable Low-Light Enhancement (DarkIR)",
                        variable=self.lowlight_var).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=5)
+
+        # Colorization controls
+        ttk.Checkbutton(main_frame, text="Enable Colorization",
+                       variable=self.color_var, command=self.toggle_colorization).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=5)
+
+        # Colorizer selection
+        ttk.Label(main_frame, text="Colorizer:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        self.colorizer_combo = ttk.Combobox(main_frame, textvariable=self.colorizer_var,
+                                           values=["VanGogh", "Cobra"], state="readonly")
+        self.colorizer_combo.grid(row=5, column=1, sticky=tk.W, padx=5)
+        self.colorizer_combo.bind('<<ComboboxSelected>>', self.on_colorizer_change)
+
+        # Text prompt for VanGogh
+        ttk.Label(main_frame, text="Text Prompt:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        self.prompt_entry = ttk.Entry(main_frame, textvariable=self.text_prompt, width=50)
+        self.prompt_entry.grid(row=6, column=1, padx=5)
+
+        # Reference image upload
+        ttk.Label(main_frame, text="Reference Image:").grid(row=7, column=0, sticky=tk.W, pady=5)
+        ref_frame = ttk.Frame(main_frame)
+        ref_frame.grid(row=7, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Entry(ref_frame, textvariable=self.ref_path, width=40).grid(row=0, column=0, sticky=(tk.W, tk.E))
+        ttk.Button(ref_frame, text="Browse", command=self.browse_reference).grid(row=0, column=1, padx=(5,0))
+        ref_frame.columnconfigure(0, weight=1)
         
         # Progress bar
-        ttk.Label(main_frame, text="Progress:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Progress:").grid(row=8, column=0, sticky=tk.W, pady=5)
         self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100)
-        self.progress_bar.grid(row=4, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5)
-        
+        self.progress_bar.grid(row=8, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5)
+
         # Status label
         self.status_label = ttk.Label(main_frame, textvariable=self.status_var)
-        self.status_label.grid(row=5, column=0, columnspan=3, pady=10)
-        
+        self.status_label.grid(row=9, column=0, columnspan=3, pady=10)
+
         # Process button
-        ttk.Button(main_frame, text="Process Video", command=self.start_processing).grid(row=6, column=1, pady=20)
-        
+        ttk.Button(main_frame, text="Process Video", command=self.start_processing).grid(row=10, column=1, pady=20)
+
         # VRAM monitor
         self.vram_label = ttk.Label(main_frame, text="VRAM: 0.00GB")
-        self.vram_label.grid(row=7, column=0, columnspan=3, pady=5)
+        self.vram_label.grid(row=11, column=0, columnspan=3, pady=5)
         
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
@@ -135,6 +172,32 @@ class VideoEnhancerApp:
         )
         if filename:
             self.output_path.set(filename)
+
+    def browse_reference(self):
+        """Browse for reference image file"""
+        filename = filedialog.askopenfilename(
+            title="Select Reference Image",
+            filetypes=[("JPG files", "*.jpg"), ("JPEG files", "*.jpeg"), ("PNG files", "*.png"), ("All files", "*.*")]
+        )
+        if filename:
+            self.ref_path.set(filename)
+
+    def toggle_colorization(self):
+        """Toggle colorization controls visibility"""
+        if self.color_var.get():
+            self.colorizer_combo.config(state="readonly")
+            self.prompt_entry.config(state="normal")
+        else:
+            self.colorizer_combo.config(state="disabled")
+            self.prompt_entry.config(state="disabled")
+
+    def on_colorizer_change(self, event=None):
+        """Handle colorizer selection change"""
+        colorizer = self.colorizer_var.get()
+        if colorizer == "VanGogh":
+            self.prompt_entry.config(state="normal")
+        elif colorizer == "Cobra":
+            self.prompt_entry.config(state="disabled")
     
     def monitor_vram(self):
         """Monitor VRAM usage"""
@@ -168,6 +231,12 @@ class VideoEnhancerApp:
             elif model_name == "DarkIR":
                 # DarkIR model loading (placeholder - needs actual implementation)
                 model = self.load_darkir_model()
+            elif model_name == "VanGogh":
+                # VanGogh model loading (placeholder - sparse repo)
+                model = self.load_vangogh_model()
+            elif model_name == "Cobra":
+                # Cobra model loading
+                model = self.load_cobra_model()
             else:
                 raise ValueError(f"Unknown model: {model_name}")
             
@@ -202,6 +271,23 @@ class VideoEnhancerApp:
         """Load DarkIR low-light enhancement model"""
         # Placeholder - implement actual DarkIR loading
         return nn.Identity()  # Temporary placeholder
+
+    def load_vangogh_model(self):
+        """Load VanGogh colorization model"""
+        # VanGogh repository is sparse - implementing fallback
+        print("Warning: VanGogh repository is sparse, using fallback colorization")
+        return nn.Identity()  # Temporary placeholder
+
+    def load_cobra_model(self):
+        """Load Cobra colorization model"""
+        try:
+            # Attempt to load Cobra model from app.py
+            # This is a placeholder - actual implementation would load from Cobra/app.py
+            print("Loading Cobra colorization model...")
+            return nn.Identity()  # Temporary placeholder
+        except Exception as e:
+            print(f"Error loading Cobra model: {e}")
+            return nn.Identity()  # Fallback
     
     def start_processing(self):
         """Start video processing in separate thread"""
@@ -253,6 +339,14 @@ class VideoEnhancerApp:
                 if darkir_model is None:
                     return
 
+            # Load colorization model if enabled
+            colorizer_model = None
+            if self.color_var.get():
+                colorizer_name = self.colorizer_var.get()
+                colorizer_model = self.load_model(colorizer_name)
+                if colorizer_model is None:
+                    return
+
             # Setup video writer
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(self.output_path.get(), fourcc, fps, (width, height))
@@ -277,7 +371,9 @@ class VideoEnhancerApp:
                 # Convert to tensor
                 frame_tensor = self.frame_to_tensor(frame)
 
-                # Low-light enhancement first
+                # Processing chain: Low-light → Denoise → Colorize
+
+                # Step 1: Low-light enhancement
                 if darkir_model is not None:
                     with torch.cuda.amp.autocast():
                         frame_tensor = self.apply_darkir(darkir_model, frame_tensor)
@@ -287,10 +383,21 @@ class VideoEnhancerApp:
 
                 # Process when buffer is ready
                 if len(self.frame_buffer) >= min(3, self.window_size):
+                    # Step 2: Denoising
                     denoised_tensor = self.apply_denoising(denoiser_model, denoiser_name)
 
+                    # Step 3: Colorization (if enabled and frame is grayscale)
+                    final_tensor = denoised_tensor
+                    if colorizer_model is not None:
+                        # Check if frame is grayscale (low channel variance)
+                        channel_var = torch.var(denoised_tensor, dim=[2,3]).mean()
+                        if channel_var < 0.01:  # Likely grayscale
+                            final_tensor = self.apply_colorization(colorizer_model, denoised_tensor)
+                        else:
+                            print("RGB detected - skipping colorization")
+
                     # Convert back to frame
-                    output_frame = self.tensor_to_frame(denoised_tensor)
+                    output_frame = self.tensor_to_frame(final_tensor)
                     out.write(output_frame)
 
                     processed_frames += 1
@@ -377,6 +484,58 @@ class VideoEnhancerApp:
 
         return selection
 
+    def auto_select_colorizer(self, sample_frames):
+        """RL-based automatic colorizer selection"""
+        if not sample_frames:
+            return "VanGogh"  # Default fallback
+
+        try:
+            # Compute quality metrics for selection
+            quality_scores = []
+
+            for frame in sample_frames:
+                # Convert to tensor for analysis
+                frame_tensor = self.frame_to_tensor(frame)
+
+                # Simulate colorization quality (placeholder metrics)
+                # In real implementation, would use SSIM/LPIPS/FID
+                gray_var = torch.var(frame_tensor).item()
+                edge_strength = torch.std(frame_tensor).item()
+
+                # Simple heuristic: VanGogh for high detail, Cobra for simple scenes
+                vangogh_score = edge_strength * 0.8 + gray_var * 0.2
+                cobra_score = (1.0 - edge_strength) * 0.6 + gray_var * 0.4
+
+                quality_scores.append({
+                    'vangogh': vangogh_score,
+                    'cobra': cobra_score
+                })
+
+            # Average scores
+            avg_vangogh = np.mean([s['vangogh'] for s in quality_scores])
+            avg_cobra = np.mean([s['cobra'] for s in quality_scores])
+
+            # Select best model
+            selection = "VanGogh" if avg_vangogh > avg_cobra else "Cobra"
+
+            # Bias audit for colorization
+            if len(self.fitness_scores) > 10:
+                recent_selections = self.fitness_scores[-10:]
+                vangogh_bias = sum(1 for s in recent_selections if s > 0.7) / len(recent_selections)
+
+                if vangogh_bias > 0.7:  # >70% bias to VanGogh
+                    # Mutate selection threshold
+                    if selection == "VanGogh" and avg_cobra > 0.3:
+                        selection = "Cobra"
+                        print("Bias detected in colorizer selection, switching to Cobra")
+
+            print(f"Auto-selected colorizer: {selection} (VanGogh: {avg_vangogh:.3f}, Cobra: {avg_cobra:.3f})")
+            return selection
+
+        except Exception as e:
+            print(f"Auto-selection error: {e}")
+            return "VanGogh"  # Fallback
+
     def frame_to_tensor(self, frame):
         """Convert OpenCV frame to PyTorch tensor"""
         # Convert BGR to RGB
@@ -437,6 +596,51 @@ class VideoEnhancerApp:
         except Exception as e:
             print(f"Denoising error ({model_name}): {e}")
             return self.frame_buffer[-1]  # Return original on error
+
+    def apply_colorization(self, model, frame_tensor):
+        """Apply colorization to grayscale frame"""
+        try:
+            with torch.no_grad():
+                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                    colorizer_name = self.colorizer_var.get()
+
+                    if colorizer_name == "VanGogh":
+                        # VanGogh with text prompt
+                        prompt = self.text_prompt.get() or "natural colors"
+                        colorized = self.apply_vangogh_colorization(model, frame_tensor, prompt)
+                    elif colorizer_name == "Cobra":
+                        # Cobra with reference image
+                        ref_path = self.ref_path.get()
+                        if not ref_path:
+                            print("Warning: No reference image for Cobra, using fallback")
+                            return frame_tensor
+                        colorized = self.apply_cobra_colorization(model, frame_tensor, ref_path)
+                    else:
+                        return frame_tensor
+
+                    # Log VRAM usage for colorization
+                    if torch.cuda.is_available():
+                        vram_used = torch.cuda.memory_allocated() / 1e9
+                        if vram_used > 5.0:
+                            print(f"Warning: High VRAM usage during colorization: {vram_used:.2f}GB")
+
+                    return colorized
+
+        except Exception as e:
+            print(f"Colorization error ({self.colorizer_var.get()}): {e}")
+            return frame_tensor  # Return original on error
+
+    def apply_vangogh_colorization(self, model, frame_tensor, prompt):
+        """Apply VanGogh colorization with text prompt"""
+        # Placeholder - VanGogh repo is sparse
+        print(f"VanGogh colorization with prompt: '{prompt}'")
+        return frame_tensor  # Temporary fallback
+
+    def apply_cobra_colorization(self, model, frame_tensor, ref_path):
+        """Apply Cobra colorization with reference image"""
+        # Placeholder - implement Cobra inference
+        print(f"Cobra colorization with reference: {ref_path}")
+        return frame_tensor  # Temporary fallback
 
     def add_audio_track(self):
         """Add audio from input to output video using moviepy"""

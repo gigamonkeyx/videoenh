@@ -68,11 +68,35 @@ class TestVideoEnhancerApp:
         with patch.object(app, 'load_darkir_model') as mock_load:
             mock_model = Mock(spec=torch.nn.Module)
             mock_load.return_value = mock_model
-            
+
             result = app.load_model("DarkIR")
-            
+
             assert result is not None
             assert "DarkIR" in app.models
+            mock_load.assert_called_once()
+
+    def test_load_model_vangogh(self, app):
+        """Test VanGogh model loading"""
+        with patch.object(app, 'load_vangogh_model') as mock_load:
+            mock_model = Mock(spec=torch.nn.Module)
+            mock_load.return_value = mock_model
+
+            result = app.load_model("VanGogh")
+
+            assert result is not None
+            assert "VanGogh" in app.models
+            mock_load.assert_called_once()
+
+    def test_load_model_cobra(self, app):
+        """Test Cobra model loading"""
+        with patch.object(app, 'load_cobra_model') as mock_load:
+            mock_model = Mock(spec=torch.nn.Module)
+            mock_load.return_value = mock_model
+
+            result = app.load_model("Cobra")
+
+            assert result is not None
+            assert "Cobra" in app.models
             mock_load.assert_called_once()
     
     def test_load_model_invalid(self, app):
@@ -213,6 +237,76 @@ class TestVideoEnhancerApp:
         
         # Threshold should be mutated down due to bias
         assert app.rl_threshold < original_threshold
+
+    def test_apply_colorization_vangogh(self, app):
+        """Test VanGogh colorization"""
+        # Mock model and setup
+        mock_model = Mock()
+        app.colorizer_var.set("VanGogh")
+        app.text_prompt.set("natural colors")
+        app.use_amp = False
+
+        # Input tensor (grayscale-like)
+        input_tensor = torch.rand(1, 3, 720, 1280) * 0.5  # Low variance
+
+        with patch.object(app, 'apply_vangogh_colorization', return_value=input_tensor) as mock_vangogh:
+            result = app.apply_colorization(mock_model, input_tensor)
+
+            mock_vangogh.assert_called_once_with(mock_model, input_tensor, "natural colors")
+            assert torch.equal(result, input_tensor)
+
+    def test_apply_colorization_cobra(self, app):
+        """Test Cobra colorization"""
+        # Mock model and setup
+        mock_model = Mock()
+        app.colorizer_var.set("Cobra")
+        app.ref_path.set("test_ref.jpg")
+        app.use_amp = False
+
+        # Input tensor
+        input_tensor = torch.rand(1, 3, 720, 1280)
+
+        with patch.object(app, 'apply_cobra_colorization', return_value=input_tensor) as mock_cobra:
+            result = app.apply_colorization(mock_model, input_tensor)
+
+            mock_cobra.assert_called_once_with(mock_model, input_tensor, "test_ref.jpg")
+            assert torch.equal(result, input_tensor)
+
+    def test_apply_colorization_no_reference(self, app):
+        """Test Cobra colorization without reference image"""
+        mock_model = Mock()
+        app.colorizer_var.set("Cobra")
+        app.ref_path.set("")  # No reference
+        app.use_amp = False
+
+        input_tensor = torch.rand(1, 3, 720, 1280)
+
+        result = app.apply_colorization(mock_model, input_tensor)
+
+        # Should return original tensor when no reference
+        assert torch.equal(result, input_tensor)
+
+    def test_auto_select_colorizer(self, app):
+        """Test automatic colorizer selection"""
+        # Create sample frames
+        sample_frames = [np.random.randint(0, 255, (720, 1280, 3), dtype=np.uint8) for _ in range(3)]
+
+        result = app.auto_select_colorizer(sample_frames)
+
+        assert result in ["VanGogh", "Cobra"]
+
+    def test_colorization_bias_detection(self, app):
+        """Test bias detection in colorizer selection"""
+        # Simulate bias toward VanGogh
+        app.fitness_scores = [0.8] * 12  # High fitness scores indicating VanGogh bias
+
+        sample_frames = [np.random.randint(0, 255, (720, 1280, 3), dtype=np.uint8) for _ in range(3)]
+
+        # Should detect bias and potentially switch to Cobra
+        result = app.auto_select_colorizer(sample_frames)
+
+        # Result should be valid
+        assert result in ["VanGogh", "Cobra"]
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
